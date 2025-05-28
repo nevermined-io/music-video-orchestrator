@@ -2,6 +2,8 @@ import { logMessage } from "../utils/logMessage";
 import { logger } from "../logger/logger";
 import { PLAN_DID } from "../config/env";
 import { performSwapForPlan, isBalanceSufficient } from "./blockchain";
+import { sendFriendlySseEvent } from "../utils/sseFriendly";
+import { retryOperation } from "../utils/retryOperation";
 
 /**
  * Extracts the token address from a given plan DDO.
@@ -67,19 +69,62 @@ export async function ensureSufficientBalance(
   planDid: string,
   step: any,
   payments: any,
-  requiredBalance: number = 1
+  requiredBalance: number = 1,
+  agentName: string = ""
 ): Promise<boolean> {
   logMessage(payments, {
     task_id: step.task_id,
     level: "info",
     message: `Checking balance for plan ${planDid}...`,
   });
-  const balanceResult = await payments.getPlanBalance(planDid);
+  sendFriendlySseEvent(
+    step.task_id,
+    "reasoning",
+    `Checking balance ${agentName ? "for " + agentName + " agent" : ""}`,
+    { planDID: planDid }
+  );
+  let balanceResult;
+  try {
+    balanceResult = await retryOperation(
+      () => payments.getPlanBalance(planDid),
+      2,
+      async (err, attempt, maxRetries) => {
+        sendFriendlySseEvent(
+          step.task_id,
+          "warning",
+          `Failed to get balance for plan ${planDid} (attempt ${attempt + 1}/${
+            maxRetries + 1
+          }): ${err.message}. Retrying...`,
+          { planDID: planDid }
+        );
+      }
+    );
+  } catch (error: any) {
+    sendFriendlySseEvent(
+      step.task_id,
+      "error",
+      `Failed to get balance for plan ${planDid}: ${error.message}`,
+      { planDID: planDid }
+    );
+    logger.error(`Error getting balance for plan ${planDid}: ${error.message}`);
+    await logMessage(payments, {
+      task_id: step.task_id,
+      level: "error",
+      message: `Error getting balance for plan ${planDid}: ${error.message}`,
+    });
+    return false;
+  }
 
   if (
     parseInt(balanceResult.balance) < requiredBalance &&
     !balanceResult.isOwner
   ) {
+    sendFriendlySseEvent(
+      step.task_id,
+      "reasoning",
+      `Balance checked. Insufficient balance (Minimum required: ${requiredBalance}). Attempting to purchase credits...`,
+      { planDID: planDid }
+    );
     logMessage(payments, {
       task_id: step.task_id,
       level: "info",
@@ -87,13 +132,62 @@ export async function ensureSufficientBalance(
     });
 
     // Retrieve external plan DDO.
-    const externalPlanDDO = await payments.getAssetDDO(planDid);
+    let externalPlanDDO;
+    try {
+      externalPlanDDO = await retryOperation(
+        () => payments.getAssetDDO(planDid),
+        2,
+        async (err, attempt, maxRetries) => {
+          sendFriendlySseEvent(
+            step.task_id,
+            "warning",
+            `Failed to get external plan DDO for ${planDid} (attempt ${
+              attempt + 1
+            }/${maxRetries + 1}): ${err.message}. Retrying...`,
+            { planDID: planDid }
+          );
+        }
+      );
+    } catch (error: any) {
+      sendFriendlySseEvent(
+        step.task_id,
+        "error",
+        `Failed to get external plan DDO for ${planDid}: ${error.message}`,
+        { planDID: planDid }
+      );
+      return false;
+    }
     const externalTokenAddress = extractTokenAddress(externalPlanDDO);
+    const externalTokenName = extractTokenName(externalPlanDDO);
 
     // Retrieve our own plan DDO.
-    const ourPlanDDO = await payments.getAssetDDO(PLAN_DID);
+    let ourPlanDDO;
+    try {
+      ourPlanDDO = await retryOperation(
+        () => payments.getAssetDDO(PLAN_DID),
+        2,
+        async (err, attempt, maxRetries) => {
+          sendFriendlySseEvent(
+            step.task_id,
+            "warning",
+            `Failed to get our plan DDO (attempt ${attempt + 1}/${
+              maxRetries + 1
+            }): ${err.message}. Retrying...`,
+            { planDID: PLAN_DID }
+          );
+        }
+      );
+    } catch (error: any) {
+      sendFriendlySseEvent(
+        step.task_id,
+        "error",
+        `Failed to get our plan DDO: ${error.message}`,
+        { planDID: PLAN_DID }
+      );
+      return false;
+    }
     const ourTokenAddress = extractTokenAddress(ourPlanDDO);
-    const externalTokenName = extractTokenName(externalPlanDDO);
+    const ourTokenName = extractTokenName(ourPlanDDO);
 
     // Determine the required subscription price from the external plan DDO.
     const planPrice = extractPlanPrice(externalPlanDDO);
@@ -104,36 +198,83 @@ export async function ensureSufficientBalance(
       ourTokenAddress &&
       externalTokenAddress.toLowerCase() !== ourTokenAddress.toLowerCase()
     ) {
+      sendFriendlySseEvent(
+        step.task_id,
+        "reasoning",
+        `Plan ${planDid} requires ${planPrice} ${externalTokenName}.`,
+        { planDID: planDid }
+      );
       const agentWallet: string | undefined = await extractAgentWallet(
         ourPlanDDO
       );
       if (agentWallet) {
-        const sufficient = await isBalanceSufficient(
-          externalTokenAddress,
-          agentWallet,
-          planPrice
-        );
+        let sufficient;
+        try {
+          sufficient = await retryOperation(
+            () =>
+              isBalanceSufficient(externalTokenAddress, agentWallet, planPrice),
+            2,
+            async (err, attempt, maxRetries) => {
+              sendFriendlySseEvent(
+                step.task_id,
+                "warning",
+                `Failed to check balance for ${externalTokenName} (attempt ${
+                  attempt + 1
+                }/${maxRetries + 1}): ${err.message}. Retrying...`,
+                { planDID: planDid }
+              );
+            }
+          );
+        } catch (error: any) {
+          sendFriendlySseEvent(
+            step.task_id,
+            "error",
+            `Failed to check balance for ${externalTokenName}: ${error.message}`,
+            { planDID: planDid }
+          );
+          return false;
+        }
 
         if (!sufficient) {
-          const externalTokenName = extractTokenName(externalPlanDDO);
+          sendFriendlySseEvent(
+            step.task_id,
+            "reasoning",
+            `We don't have enough ${externalTokenName} to pay for this plan. Attempting to swap...`
+          );
           logMessage(payments, {
             task_id: step.task_id,
             level: "info",
             message: `Agent under plan ${planDid} accepts subscriptions in ${externalTokenName}. Attempting swap. Required amount: ${planPrice} ${externalTokenName}`,
           });
-          const networkId = parseInt(Object.keys(ourPlanDDO._nvm.networks)[0]);
-          const {
-            success: swapSuccess,
-            swapTxHash,
-            transferTxHash,
-          } = await performSwapForPlan(
-            planPrice,
-            ourTokenAddress,
-            externalTokenAddress,
-            agentWallet,
-            networkId
-          );
-          if (!swapSuccess) {
+          let swapResult;
+          try {
+            swapResult = await retryOperation(
+              () =>
+                performSwapForPlan(
+                  planPrice,
+                  ourTokenAddress,
+                  externalTokenAddress,
+                  agentWallet,
+                  parseInt(Object.keys(ourPlanDDO._nvm.networks)[0])
+                ),
+              2,
+              async (err, attempt, maxRetries) => {
+                sendFriendlySseEvent(
+                  step.task_id,
+                  "warning",
+                  `Failed to swap tokens (attempt ${attempt + 1}/${
+                    maxRetries + 1
+                  }): ${err.message}. Retrying...`,
+                  { planDID: planDid }
+                );
+              }
+            );
+          } catch (error: any) {
+            sendFriendlySseEvent(
+              step.task_id,
+              "error",
+              `Failed to swap ${ourTokenName} for ${planPrice} ${externalTokenName}: ${error.message}`
+            );
             await logMessage(payments, {
               task_id: step.task_id,
               level: "error",
@@ -146,6 +287,44 @@ export async function ensureSufficientBalance(
             });
             return false;
           }
+          const {
+            success: swapSuccess,
+            swapTxHash,
+            transferTxHash,
+          } = swapResult;
+          if (!swapSuccess) {
+            sendFriendlySseEvent(
+              step.task_id,
+              "error",
+              `Failed to swap ${ourTokenName} for ${planPrice} ${externalTokenName}.`
+            );
+            await logMessage(payments, {
+              task_id: step.task_id,
+              level: "error",
+              message: `Failed to swap tokens for plan ${planDid}.`,
+            });
+            await payments.query.updateStep(step.did, {
+              ...step,
+              step_status: "Failed",
+              output: "Insufficient balance and failed to swap tokens.",
+            });
+            return false;
+          }
+
+          sendFriendlySseEvent(
+            step.task_id,
+            "transaction",
+            `Swap transaction successful.`,
+            { txHash: swapTxHash }
+          );
+
+          sendFriendlySseEvent(
+            step.task_id,
+            "transaction",
+            `Transfer transaction successful.`,
+            { txHash: transferTxHash }
+          );
+
           await logMessage(payments, {
             task_id: step.task_id,
             level: "info",
@@ -164,24 +343,56 @@ export async function ensureSufficientBalance(
       planPrice == "0"
         ? `Ordering free plan ${planDid}.`
         : `Purchasing credits for plan ${planDid} for ${planPrice} ${externalTokenName}.`;
+
+    sendFriendlySseEvent(
+      step.task_id,
+      "reasoning",
+      `Ordering credits for plan ${planDid}...`,
+      { planDID: planDid }
+    );
     await logMessage(payments, {
       task_id: step.task_id,
       level: "info",
       message,
     });
     try {
-      const orderResult = await payments.orderPlan(planDid);
+      const orderResult: any = await retryOperation(
+        () => payments.orderPlan(planDid),
+        2,
+        async (err, attempt, maxRetries) => {
+          sendFriendlySseEvent(
+            step.task_id,
+            "warning",
+            `Failed to order credits for plan ${planDid} (attempt ${
+              attempt + 1
+            }/${maxRetries + 1}): ${err.message}. Retrying...`,
+            { planDID: planDid }
+          );
+        }
+      );
       if (!orderResult.success) {
         throw new Error(
           `Failed to order credits for plan ${planDid}: Insufficient balance and failed to purchase credits..`
         );
       }
+      sendFriendlySseEvent(
+        step.task_id,
+        "reasoning",
+        `Credits ordered for plan ${planDid}. Tx: ${orderResult.agreementId}`,
+        { planDID: planDid }
+      );
       await logMessage(payments, {
         task_id: step.task_id,
         level: "info",
         message: `Ordered credits for plan ${planDid}. Tx: ${orderResult.agreementId}`,
       });
     } catch (error) {
+      sendFriendlySseEvent(
+        step.task_id,
+        "error",
+        `Failed to order credits for plan ${planDid}. Insufficient balance and failed to purchase credits: ${error.message}`,
+        { planDID: planDid }
+      );
       logger.error(
         `Error ordering credits for plan ${planDid}: ${error.message}`
       );
@@ -198,6 +409,14 @@ export async function ensureSufficientBalance(
       return false;
     }
   }
+
+  // When the balance is sufficient, before returning true:
+  sendFriendlySseEvent(
+    step.task_id,
+    "reasoning",
+    `Sufficient balance for plan ${planDid} in task ${step.task_id}`,
+    { planDID: planDid }
+  );
 
   return true;
 }

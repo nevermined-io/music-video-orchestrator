@@ -125,13 +125,15 @@ export async function isBalanceSufficient(
  * @param {Signer} signer - An ethers Signer instance controlling the wallet.
  * @param {string} agentWallet - The destination agent wallet address.
  * @param {amount} amount - The amount to transfer (in smallest units).
+ * @param {number} [nonce] - Optional nonce to use for the transaction.
  * @returns {Promise<{ success: boolean, txHash?: string }>} A promise that resolves to an object containing the success flag and the transfer transaction hash if applicable.
  */
 export async function transferAmountToAgentWallet(
   tokenAddress: string,
   signer: Signer,
   agentWallet: string,
-  amount: string
+  amount: string,
+  nonce?: number
 ): Promise<{ success: boolean; txHash?: string }> {
   const tokenContract = new Contract(tokenAddress, ERC20_ABI, signer);
   const walletAddress = await signer.getAddress();
@@ -146,7 +148,11 @@ export async function transferAmountToAgentWallet(
     await tokenContract.decimals()
   );
 
-  const tx = await tokenContract.transfer(agentWallet, amountBN);
+  /**
+   * If nonce is provided, use it in the transaction options.
+   */
+  const txOptions = nonce !== undefined ? { nonce } : {};
+  const tx = await tokenContract.transfer(agentWallet, amountBN, txOptions);
   await tx.wait();
   logger.info(
     `Transferred ${amount.toString()} tokens from ${walletAddress} to agent wallet ${agentWallet}.`
@@ -265,33 +271,58 @@ export async function performSwapForPlan(
       .maximumAmountIn(slippageTolerance)
       .quotient.toString();
 
-    // Approve the router to spend our token.
-    const ourTokenContract = new Contract(ourToken.address, ERC20_ABI, wallet);
-    await ourTokenContract.approve(UNISWAP_V2_ROUTER_ADDRESS, maxAmountIn);
+    // Get the current nonce from the network (pending state)
+    let nonce = await provider.getTransactionCount(
+      await wallet.getAddress(),
+      "pending"
+    );
 
-    // Execute the swap.
+    // Approve the router to spend our token, using the current nonce
+    const ourTokenContract = new Contract(ourToken.address, ERC20_ABI, wallet);
+    /**
+     * Manually set the nonce for the approve transaction.
+     */
+    const approveTx = await ourTokenContract.approve(
+      UNISWAP_V2_ROUTER_ADDRESS,
+      maxAmountIn,
+      { nonce }
+    );
+    await approveTx.wait();
+    nonce++;
+
+    // Execute the swap, using the incremented nonce
     const router = new Contract(
       UNISWAP_V2_ROUTER_ADDRESS,
       UNISWAP_ROUTER_ABI,
       wallet
     );
     const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+    /**
+     * Manually set the nonce for the swap transaction.
+     */
     const swapTx = await router.swapTokensForExactTokens(
       requiredAmount,
       maxAmountIn,
       [ourToken.address, extToken.address],
       await wallet.getAddress(),
-      deadline
+      deadline,
+      { nonce }
     );
     await swapTx.wait();
     logger.info(`Swap completed successfully with TX hash: ${swapTx.hash}`);
+    nonce++;
 
-    // Transfer all swapped tokens to the agent wallet.
+    // Transfer all swapped tokens to the agent wallet, using the incremented nonce
+    /**
+     * Manually set the nonce for the transfer transaction inside the helper.
+     * We need to update transferAmountToAgentWallet to accept a nonce.
+     */
     const transferResult = await transferAmountToAgentWallet(
       extToken.address,
       wallet,
       agentWallet,
-      requiredAmount
+      requiredAmount,
+      nonce // Pass the nonce to the transfer function
     );
 
     return {
@@ -299,10 +330,10 @@ export async function performSwapForPlan(
       swapTxHash: swapTx.hash,
       transferTxHash: transferResult.txHash,
     };
-  } catch (error) {
+  } catch (error: any) {
     logger.error(
       `Swap error: ${error instanceof Error ? error.message : error}`
     );
-    return { success: false };
+    throw error; // Throw the error so retryOperation can retry
   }
 }

@@ -6,6 +6,8 @@ import { logMessage } from "../utils/logMessage";
 import { hasSongMetadata, getVideoDuration } from "../utils/utils";
 import { AgentExecutionStatus, generateStepId } from "@nevermined-io/payments";
 import { uploadVideoToIPFS } from "../utils/uploadVideoToIPFS";
+import { sendFriendlySseEvent } from "../utils/sseFriendly";
+import { retryOperation } from "../utils/retryOperation";
 
 import {
   MUSIC_SCRIPT_GENERATOR_DID,
@@ -23,6 +25,7 @@ import {
   validateImageGenerationTask,
   validateVideoGenerationTask,
 } from "./taskValidation";
+import { setUserRequest } from "../utils/conversationStore";
 
 /* -------------------------------------
    Helper Functions
@@ -52,32 +55,6 @@ async function updateStepFailure(
     step_status: AgentExecutionStatus.Failed,
     output: errorMessage,
   });
-}
-
-/**
- * Generic retry helper.
- * Tries the given operation. If it fails, retries up to maxRetries times before finally rejecting.
- *
- * @param operation - A function returning a promise.
- * @param maxRetries - Maximum number of additional attempts (default is 2).
- * @returns {Promise<T>} - The resolved value from the operation.
- */
-async function retryOperation<T>(
-  operation: () => Promise<T>,
-  maxRetries: number = 2
-): Promise<T> {
-  let attempt = 0;
-  while (attempt <= maxRetries) {
-    try {
-      return await operation();
-    } catch (err) {
-      if (attempt === maxRetries) {
-        throw err;
-      }
-      attempt++;
-    }
-  }
-  throw new Error("Unreachable code in retryOperation");
 }
 
 /**
@@ -124,7 +101,9 @@ async function executeTaskWithValidation(
             resolve(artifacts);
           } else if (taskLog.task_status === AgentExecutionStatus.Failed) {
             reject(
-              new Error(`Task failed with status: ${taskLog.task_status}`)
+              new Error(
+                `Task ${taskLog.task_id} failed with status: ${taskLog.task_status}`
+              )
             );
           }
         } catch (err) {
@@ -238,6 +217,19 @@ export async function handleInitStep(step: any, payments: any) {
       is_last: true,
     },
   ];
+  setUserRequest(step.task_id, step.input_query);
+
+  sendFriendlySseEvent(
+    step.task_id,
+    "reasoning",
+    `I have received the user's request. I will now create the entire workflow pipeline.
+    First step: Song Generator.
+    Second step: Music Script Generator.
+    Third step: Images Generator.
+    Fourth step: Video Generator.
+    Fifth step: Compile Video.
+    Sixth step: Upload to IPFS.`
+  );
 
   await logMessage(payments, {
     task_id: step.task_id,
@@ -271,10 +263,18 @@ export async function handleCallSongGenerator(step: any, payments: any) {
     message: `Creating task for Song Generator Agent with prompt: "${step.input_query}"`,
   });
 
+  sendFriendlySseEvent(
+    step.task_id,
+    "reasoning",
+    `First step: Song generation. I will outsource this task to a Song Generator Agent.`
+  );
+
   const hasBalance = await ensureSufficientBalance(
     SONG_GENERATOR_PLAN_DID,
     step,
-    payments
+    payments,
+    1,
+    "Song Generator"
   );
   if (!hasBalance) return;
 
@@ -289,6 +289,18 @@ export async function handleCallSongGenerator(step: any, payments: any) {
     input_artifacts,
   };
 
+  logMessage(payments, {
+    task_id: step.task_id,
+    level: "info",
+    message: `Calling Song Generator Agent with prompt: "${prompt}"`,
+  });
+
+  sendFriendlySseEvent(
+    step.task_id,
+    "callAgent",
+    `Calling Song Generator Agent to generate a song based on the user's request: "${prompt}".`
+  );
+
   try {
     await retryOperation(
       () =>
@@ -300,9 +312,23 @@ export async function handleCallSongGenerator(step: any, payments: any) {
           validateSongGenerationTask,
           step
         ),
-      2
+      2,
+      async (err, attempt, maxRetries) => {
+        sendFriendlySseEvent(
+          step.task_id,
+          "warning",
+          `Song generation failed (attempt ${attempt + 1}/${maxRetries + 1}): ${
+            err.message
+          }. Retrying...`
+        );
+      }
     );
   } catch (error: any) {
+    sendFriendlySseEvent(
+      step.task_id,
+      "error",
+      `Song generation task failed: ${error.message || error}`
+    );
     await updateStepFailure(
       step,
       payments,
@@ -325,6 +351,12 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
     message: `Creating task for Music Script Generator Agent with input_query: "${step.input_query}"`,
   });
 
+  sendFriendlySseEvent(
+    step.task_id,
+    "reasoning",
+    `Second step: Music Script Generator.`
+  );
+
   const hasBalance = await ensureSufficientBalance(
     MUSIC_SCRIPT_GENERATOR_PLAN_DID,
     step,
@@ -342,6 +374,11 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
   };
 
   try {
+    sendFriendlySseEvent(
+      step.task_id,
+      "callAgent",
+      `Calling Music Script Generator Agent to generate a music script based on the user's request: "${step.input_query}".`
+    );
     await retryOperation(
       () =>
         executeTaskWithValidation(
@@ -352,9 +389,23 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
           validateMusicScriptTask,
           step
         ),
-      2
+      2,
+      async (err, attempt, maxRetries) => {
+        sendFriendlySseEvent(
+          step.task_id,
+          "warning",
+          `Music script generation failed (attempt ${attempt + 1}/${
+            maxRetries + 1
+          }): ${err.message}. Retrying...`
+        );
+      }
     );
   } catch (error: any) {
+    sendFriendlySseEvent(
+      step.task_id,
+      "error",
+      `Failed to generate the task for the Music Script Generator.`
+    );
     await updateStepFailure(
       step,
       payments,
@@ -379,6 +430,12 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
     level: "info",
     message: `Creating image generation tasks for ${characters.length} characters and ${settings.length} settings...`,
   });
+
+  sendFriendlySseEvent(
+    step.task_id,
+    "reasoning",
+    `Third step: Images Generator. Generating ${characters.length} characters and ${settings.length} settings...`
+  );
 
   const hasBalance = await ensureSufficientBalance(
     VIDEO_GENERATOR_PLAN_DID,
@@ -408,34 +465,61 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
       input_query: subject.imagePrompt,
       input_artifacts: [{ inference_type: "text2image" }],
     };
-    return retryOperation(
-      () =>
-        executeTaskWithValidation(
+    return executeTaskWithValidation(
+      payments,
+      VIDEO_GENERATOR_DID,
+      taskData,
+      accessConfig,
+      (taskId, agentDid, accessCfg, _step, payments) =>
+        validateImageGenerationTask(
+          taskId,
+          agentDid,
+          accessCfg,
           payments,
-          VIDEO_GENERATOR_DID,
-          taskData,
-          accessConfig,
-          (taskId, agentDid, accessCfg, _step, payments) =>
-            validateImageGenerationTask(
-              taskId,
-              agentDid,
-              accessCfg,
-              payments,
-              subject.id || subject.name,
-              subjectType
-            ),
-          step
+          subject.id || subject.name,
+          subjectType
         ),
-      2
+      step
     );
   }
 
   try {
+    sendFriendlySseEvent(
+      step.task_id,
+      "callAgent",
+      `Calling Images Generator Agent to generate ${characters.length} images for characters and ${settings.length} images for settings...`
+    );
     const charactersPromises = characters.map((character: any) =>
-      createImageTask(character, "character")
+      retryOperation(
+        () => createImageTask(character, "character"),
+        2,
+        async (err, attempt, maxRetries) => {
+          sendFriendlySseEvent(
+            step.task_id,
+            "warning",
+            `Image generation failed for character "${
+              character.name
+            }" (attempt ${attempt + 1}/${maxRetries + 1}): ${
+              err.message
+            }. Retrying...`
+          );
+        }
+      )
     );
     const settingsPromises = settings.map((setting: any) =>
-      createImageTask(setting, "setting")
+      retryOperation(
+        () => createImageTask(setting, "setting"),
+        2,
+        async (err, attempt, maxRetries) => {
+          sendFriendlySseEvent(
+            step.task_id,
+            "warning",
+            `Image generation failed for setting "${setting.id}" (attempt ${
+              attempt + 1
+            }/${maxRetries + 1}): ${err.message}. Retrying...`
+          );
+        }
+      )
     );
 
     const results = await Promise.all([
@@ -453,6 +537,20 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
         if (sett) sett.imageUrl = result.url;
       }
     });
+
+    sendFriendlySseEvent(
+      step.task_id,
+      "answer",
+      `All image generation tasks completed successfully.`,
+      {},
+      {
+        mimeType: "image/png",
+        parts: [
+          ...characters.map((c: any) => c.imageUrl),
+          ...settings.map((s: any) => s.imageUrl),
+        ],
+      }
+    );
 
     logMessage(payments, {
       task_id: step.task_id,
@@ -476,6 +574,11 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
     logger.error(
       `Image generation failed: ${error.message || error}. Aborting task`
     );
+    sendFriendlySseEvent(
+      step.task_id,
+      "error",
+      `Image generation failed: ${error.message || error}. Aborting task`
+    );
     await updateStepFailure(
       step,
       payments,
@@ -488,7 +591,7 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
  * Creates a video generation task for a single prompt.
  *
  * This function performs one attempt to create a task. If any error occurs,
- * it is thrown so that the caller (using retryOperation) can retry as needed.
+ * it is thrown so that the caller can retry as needed.
  *
  * @param promptObject - The prompt object containing video generation parameters.
  * @param settings - Array of available setting objects.
@@ -596,6 +699,12 @@ export async function handleCallVideoGenerator(
   const [{ prompts, characters, settings, duration, ...inputArtifacts }] =
     step.input_artifacts;
 
+  sendFriendlySseEvent(
+    step.task_id,
+    "reasoning",
+    `Fourth step: Video Generator. Creating video generation tasks for ${prompts.length} scenes. each executed concurrently using the same subscription plan. This task may take a while to complete.`
+  );
+
   logMessage(payments, {
     task_id: step.task_id,
     level: "info",
@@ -614,6 +723,12 @@ export async function handleCallVideoGenerator(
     VIDEO_GENERATOR_DID
   );
 
+  sendFriendlySseEvent(
+    step.task_id,
+    "callAgent",
+    `Calling Video Generator Agent to generate videos for ${prompts.length} scenes...`
+  );
+
   // Use retryOperation to handle retries for each prompt
   const videoTaskPromises = prompts.map(async (promptObject: any) => {
     try {
@@ -627,7 +742,18 @@ export async function handleCallVideoGenerator(
             payments,
             step
           ),
-        2
+        2,
+        async (err, attempt, maxRetries) => {
+          sendFriendlySseEvent(
+            step.task_id,
+            "warning",
+            `Video generation failed for prompt "${
+              promptObject.prompt
+            }" (attempt ${attempt + 1}/${maxRetries + 1}): ${
+              err.message
+            }. Retrying...`
+          );
+        }
       );
     } catch (error) {
       // Log the error but don't fail the entire step
@@ -648,10 +774,20 @@ export async function handleCallVideoGenerator(
     const failedCount = results.length - successfulVideos.length;
 
     if (failedCount > 3) {
+      sendFriendlySseEvent(
+        step.task_id,
+        "error",
+        `Video generation step failed: Too many video generation failures: ${failedCount} videos failed after retries`
+      );
       throw new Error(
         `Too many video generation failures: ${failedCount} videos failed after retries`
       );
     }
+    sendFriendlySseEvent(
+      step.task_id,
+      "answer",
+      `Video generation completed. The final set is complete and ready for merging with the audio track.`
+    );
 
     logMessage(payments, {
       task_id: step.task_id,
@@ -668,6 +804,11 @@ export async function handleCallVideoGenerator(
       ],
     });
   } catch (error: any) {
+    sendFriendlySseEvent(
+      step.task_id,
+      "error",
+      `Video generation step failed: ${error.message || error}. Aborting task`
+    );
     logger.error(
       `Video generation step failed: ${error.message || error}. Aborting task`
     );
@@ -796,6 +937,11 @@ export async function handleCompileVideo(
   try {
     const [{ generatedVideos, duration, songUrl, title }] =
       step.input_artifacts;
+    sendFriendlySseEvent(
+      step.task_id,
+      "reasoning",
+      `Fifth step: Compile Video. Compiling video clips with audio for "${title}"...`
+    );
     logMessage(payments, {
       task_id: step.task_id,
       level: "info",
@@ -835,6 +981,12 @@ export async function handleCompileVideo(
     const convertedTitle =
       title.replace(/[^a-z0-9]/gi, "_").toLowerCase() + ".mp4";
 
+    sendFriendlySseEvent(
+      step.task_id,
+      "reasoning",
+      `Compilation completed for "${title}". Uploading to IPFS...`
+    );
+
     logMessage(payments, {
       task_id: step.task_id,
       level: "info",
@@ -844,6 +996,14 @@ export async function handleCompileVideo(
     const finalVideoUrl = await uploadVideoToIPFS(
       finalOutputPath,
       convertedTitle
+    );
+
+    sendFriendlySseEvent(
+      step.task_id,
+      "answer",
+      `The final video for '${title}' is ready. Here is the link: ${finalVideoUrl}`,
+      {},
+      { mimeType: "video/mp4", parts: [finalVideoUrl] }
     );
 
     await payments.query.updateStep(step.did, {
@@ -856,10 +1016,15 @@ export async function handleCompileVideo(
     fs.unlinkSync(tempOutputPath);
     fs.unlinkSync(finalOutputPath);
   } catch (err: any) {
+    sendFriendlySseEvent(
+      step.task_id,
+      "error",
+      `Compilation failed: ${err.message || JSON.stringify(err)}`
+    );
     await updateStepFailure(
       step,
       payments,
-      `Compilation failed: ${err.message || err}`
+      `Compilation failed: ${err.message || JSON.stringify(err)}`
     );
   }
 }

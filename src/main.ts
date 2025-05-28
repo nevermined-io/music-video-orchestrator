@@ -2,6 +2,7 @@ import { initializePayments } from "./payments/paymentsInstance";
 import { processSteps } from "./steps/stepHandlers";
 import { NVM_API_KEY, NVM_ENVIRONMENT, AGENT_DID } from "./config/env";
 import { logger } from "./logger/logger";
+import { startSseServer } from "./sseServer";
 
 /**
  * Main entry point for the Music Video Orchestrator.
@@ -14,6 +15,8 @@ import { logger } from "./logger/logger";
  */
 async function main() {
   try {
+    // Start SSE server for task events
+    startSseServer(3001);
     const payments = initializePayments(NVM_API_KEY, NVM_ENVIRONMENT);
     logger.info(`Connected to Nevermined Network: ${NVM_ENVIRONMENT}`);
 
@@ -28,10 +31,7 @@ async function main() {
       "Music Video Orchestrator is running and listening for events..."
     );
   } catch (error) {
-    logger.error(
-      `Error initializing orchestrator: ${(error as Error).message}`
-    );
-    process.exit(1);
+    logger.error(`Error in main function: ${error.message}`);
   }
 }
 

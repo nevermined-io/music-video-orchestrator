@@ -1,6 +1,7 @@
 import { AgentExecutionStatus } from "@nevermined-io/payments";
 import { logger } from "../logger/logger";
 import { logMessage } from "../utils/logMessage";
+import { sendFriendlySseEvent } from "../utils/sseFriendly";
 
 /**
  * Validates the result of a song generation task, marking the step as completed with song details.
@@ -37,6 +38,21 @@ export async function validateSongGenerationTask(
     output: title,
     output_artifacts: { title, tags, lyrics, songUrl, duration, idea },
   });
+  if (result.status === 201) {
+    sendFriendlySseEvent(
+      parentStep.task_id,
+      "answer",
+      `Song ${title} generated successfully: ${songUrl}`,
+      { agentDID: agentDid },
+      { mimeType: "audio/mp3", parts: [songUrl] }
+    );
+  } else {
+    sendFriendlySseEvent(
+      parentStep.task_id,
+      "error",
+      `Error generating song: ${JSON.stringify(result.data)}`
+    );
+  }
 
   logMessage(payments, {
     task_id: parentStep.task_id,
@@ -77,7 +93,7 @@ export async function validateMusicScriptTask(
   if (taskData.task.task_status !== AgentExecutionStatus.Completed) {
     return;
   }
-  const [{ transformedScenes, characters, settings }] =
+  const [{ script, transformedScenes, characters, settings }] =
     taskData.task.output_artifacts;
   const { tags, lyrics, duration, songUrl, title } = parentStep.input_artifacts;
 
@@ -96,9 +112,28 @@ export async function validateMusicScriptTask(
         prompts: transformedScenes,
         characters,
         title,
+        script,
       },
     ],
   });
+  if (result.status === 201) {
+    sendFriendlySseEvent(
+      parentStep.task_id,
+      "answer",
+      `Script and prompts generated successfully for song ${title}.`,
+      { agentDID: agentDid },
+      {
+        mimeType: "text/plain",
+        parts: [script],
+      }
+    );
+  } else {
+    sendFriendlySseEvent(
+      parentStep.task_id,
+      "error",
+      `Error generating music script data: ${JSON.stringify(result.data)}`
+    );
+  }
 
   logMessage(payments, {
     task_id: parentStep.task_id,
