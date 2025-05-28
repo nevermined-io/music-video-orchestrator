@@ -8,7 +8,11 @@ import { AgentExecutionStatus, generateStepId } from "@nevermined-io/payments";
 import { uploadVideoToIPFS } from "../utils/uploadVideoToIPFS";
 import { sendFriendlySseEvent } from "../utils/sseFriendly";
 import { retryOperation } from "../utils/retryOperation";
-import { findERC1155Burns, getProvider } from "../payments/blockchain";
+import {
+  findERC1155Burns,
+  getBlockNumber,
+  getBurnParamsForPlan,
+} from "../payments/blockchain";
 
 import {
   MUSIC_SCRIPT_GENERATOR_DID,
@@ -83,20 +87,9 @@ async function executeTaskWithValidation(
     step: any,
     payments: any
   ) => Promise<any>,
-  step: any,
-  burnParams?: {
-    contractAddress: string;
-    fromWallet: string;
-    operator: string;
-    tokenId: string | number;
-  }
+  step: any
 ): Promise<any> {
   return new Promise(async (resolve, reject) => {
-    let lastBlock: number | undefined = undefined;
-    if (burnParams) {
-      const provider = getProvider();
-      lastBlock = await provider.getBlockNumber();
-    }
     const result = await payments.query.createTask(
       agentDid,
       taskData,
@@ -127,22 +120,6 @@ async function executeTaskWithValidation(
     );
     if (result.status !== 201) {
       reject(new Error(`Error creating task: ${JSON.stringify(result.data)}`));
-    }
-    // Search for the burn after createTask if burn parameters are passed
-    if (burnParams && lastBlock !== undefined) {
-      const burns = await findERC1155Burns(
-        burnParams.contractAddress,
-        burnParams.fromWallet,
-        burnParams.operator,
-        burnParams.tokenId,
-        lastBlock
-      );
-      if (burns.length > 0) {
-        const burnTx = burns[burns.length - 1];
-        logger.info(`Burn detected after createTask: ${burnTx.txHash}`);
-      } else {
-        logger.warn("No burn detected after createTask.");
-      }
     }
   });
 }
@@ -331,6 +308,8 @@ export async function handleCallSongGenerator(step: any, payments: any) {
     `Calling Song Generator Agent to generate a song based on the user's request: "${prompt}".`
   );
 
+  const blockNumber = await getBlockNumber();
+
   try {
     await retryOperation(
       () =>
@@ -353,6 +332,25 @@ export async function handleCallSongGenerator(step: any, payments: any) {
         );
       }
     );
+    const burnParams = await getBurnParamsForPlan(
+      payments,
+      SONG_GENERATOR_PLAN_DID
+    );
+    if (burnParams) {
+      const burns = await findERC1155Burns(
+        burnParams.contractAddress,
+        burnParams.fromWallet,
+        burnParams.operator,
+        burnParams.tokenId,
+        blockNumber
+      );
+      if (burns.length > 0) {
+        const burnTx = burns[burns.length - 1];
+        logger.info(`Burn detected after createTask: ${burnTx.txHash}`);
+      } else {
+        logger.warn("No burn detected after createTask.");
+      }
+    }
   } catch (error: any) {
     sendFriendlySseEvent(
       step.task_id,

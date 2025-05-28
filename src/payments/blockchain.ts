@@ -57,6 +57,65 @@ const getWallet = () => {
   return new ethers.Wallet(PRIVATE_KEY, provider);
 };
 
+/**
+ * Returns the current block number from the provider.
+ *
+ * @returns {Promise<number>} A promise that resolves to the current block number.
+ */
+export async function getBlockNumber(): Promise<number> {
+  const provider = getProvider();
+  return provider.getBlockNumber();
+}
+
+/**
+ * Gets the contract address from the DDO.
+ *
+ * @param {any} ddo - The DDO.
+ * @returns {string} The contract address.
+ */
+export function getContractAddress(ddo: any): string {
+  return ddo.service[2].attributes.serviceAgreementTemplate.conditions
+    .find((c: any) => c.name === "transferNFT")
+    ?.parameters.find((p: any) => p.name === "_contractAddress")?.value;
+}
+
+/**
+ * Gets the creator wallet from the DDO.
+ *
+ * @param {any} ddo - The DDO.
+ * @returns {string} The creator wallet.
+ */
+export function getCreatorWallet(ddo: any): string {
+  return ddo.service[2].attributes.main.creator;
+}
+
+/**
+ * Gets the parameters needed to search for the burn of an ERC1155 NFT from the plan DID and the step.
+ *
+ * @param {any} payments - Payments instance.
+ * @param {string} planDid - DID of the plan.
+ * @returns {Promise<{ contractAddress: string, fromWallet: string, operator: string, tokenId: string | number, creatorWallet: string } | undefined>}
+ */
+export async function getBurnParamsForPlan(payments: any, planDid: string) {
+  const ddo = await payments.getAssetDDO(planDid);
+  const contractAddress = getContractAddress(ddo);
+  const creatorWallet = getCreatorWallet(ddo);
+  const operator = "0x5838B5512cF9f12FE9f2beccB20eb47211F9B0bc";
+  const fromWallet = "0xaE61638CE22c375D21B113C3370FD9c1128a8DDf";
+  const tokenId = BigInt(planDid.replace("did:nv:", "")).toString();
+
+  if (contractAddress && fromWallet && tokenId !== undefined) {
+    return {
+      contractAddress,
+      fromWallet,
+      operator,
+      tokenId,
+      creatorWallet,
+    };
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Token Helper Functions
 // ---------------------------------------------------------------------------
