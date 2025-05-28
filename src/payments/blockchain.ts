@@ -33,6 +33,10 @@ const UNISWAP_PAIR_ABI = [
   "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)",
 ];
 
+const ERC1155_ABI = [
+  "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
+];
+
 // ---------------------------------------------------------------------------
 // Provider and Wallet Helpers
 // ---------------------------------------------------------------------------
@@ -41,7 +45,7 @@ const UNISWAP_PAIR_ABI = [
  *
  * @returns {ethers.providers.JsonRpcProvider} An ethers provider.
  */
-const getProvider = () => new ethers.providers.JsonRpcProvider(RPC_URL);
+export const getProvider = () => new ethers.providers.JsonRpcProvider(RPC_URL);
 
 /**
  * Returns an ethers Wallet instance using the provided private key.
@@ -336,4 +340,55 @@ export async function performSwapForPlan(
     );
     throw error; // Throw the error so retryOperation can retry
   }
+}
+
+/**
+ * Busca eventos de burn históricos de un ERC1155 (TransferSingle a address(0)) para un usuario y token específico.
+ *
+ * @param {string} contractAddress - Dirección del contrato ERC1155
+ * @param {string} fromWallet - Wallet que tenía el NFT
+ * @param {string} operator - Dirección que ejecutó el burn (proxy)
+ * @param {string|number} tokenId - Token ID del NFT
+ * @param {number|string} fromBlock - Bloque desde el que buscar (por defecto 0)
+ * @param {number|string} toBlock - Bloque hasta el que buscar (por defecto 'latest')
+ * @returns {Promise<Array>} - Lista de transacciones de burn encontradas
+ */
+export async function findERC1155Burns(
+  contractAddress: string,
+  fromWallet: string,
+  operator: string,
+  tokenId: string | number,
+  fromBlock: number | string = 0,
+  toBlock: number | string = "latest"
+): Promise<Array<any>> {
+  const provider = getProvider();
+  const contract = new Contract(contractAddress, ERC1155_ABI, provider);
+  const burnAddress = "0x0000000000000000000000000000000000000000";
+  const filter = contract.filters.TransferSingle(
+    operator,
+    fromWallet,
+    burnAddress,
+    tokenId
+  );
+  const events = await contract.queryFilter(filter, fromBlock, toBlock);
+  return events.map((ev) => {
+    const args = ev.args;
+    const hasArgs =
+      args &&
+      typeof args === "object" &&
+      "operator" in args &&
+      "from" in args &&
+      "to" in args &&
+      "id" in args &&
+      "value" in args;
+    return {
+      txHash: ev.transactionHash,
+      blockNumber: ev.blockNumber,
+      operator: hasArgs ? args.operator : undefined,
+      from: hasArgs ? args.from : undefined,
+      to: hasArgs ? args.to : undefined,
+      tokenId: hasArgs ? args.id.toString() : undefined,
+      value: hasArgs ? args.value.toString() : undefined,
+    };
+  });
 }

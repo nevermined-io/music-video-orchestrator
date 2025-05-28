@@ -420,3 +420,33 @@ export async function ensureSufficientBalance(
 
   return true;
 }
+
+/**
+ * Gets the parameters needed to search for the burn of an ERC1155 NFT from the plan DID and the step.
+ *
+ * @param {any} payments - Payments instance.
+ * @param {string} planDid - DID of the plan.
+ * @param {any} step - Step object (must contain wallet and tokenId).
+ * @returns {Promise<{ contractAddress: string, fromWallet: string, operator: string, tokenId: string | number } | undefined>}
+ */
+export async function getBurnParamsForPlan(
+  payments: any,
+  planDid: string,
+  step: any
+) {
+  const ddo = await payments.getAssetDDO(planDid);
+  const contractAddress = extractTokenAddress(ddo);
+  const fromWallet = step.wallet;
+  const tokenId = step.tokenId;
+  const operator = "0x5838B5512cF9f12FE9f2beccB20eb47211F9B0bc";
+
+  if (contractAddress && fromWallet && tokenId !== undefined) {
+    return {
+      contractAddress,
+      fromWallet,
+      operator,
+      tokenId,
+    };
+  }
+  return undefined;
+}

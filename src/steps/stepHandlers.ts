@@ -8,6 +8,7 @@ import { AgentExecutionStatus, generateStepId } from "@nevermined-io/payments";
 import { uploadVideoToIPFS } from "../utils/uploadVideoToIPFS";
 import { sendFriendlySseEvent } from "../utils/sseFriendly";
 import { retryOperation } from "../utils/retryOperation";
+import { findERC1155Burns, getProvider } from "../payments/blockchain";
 
 import {
   MUSIC_SCRIPT_GENERATOR_DID,
@@ -59,6 +60,7 @@ async function updateStepFailure(
 
 /**
  * Executes a task using payments.query.createTask and validates it via the provided validation function.
+ * If burn parameters are passed, it searches for the burn event after creating the task.
  *
  * @param payments - The Payments instance.
  * @param agentDid - The DID of the external agent.
@@ -66,6 +68,7 @@ async function updateStepFailure(
  * @param accessConfig - The access configuration for the agent.
  * @param validationFn - A function that validates the task output. It receives (taskId, agentDid, accessConfig, step, payments) and returns a promise with the validated artifacts.
  * @param step - The current step object.
+ * @param [burnParams] - (Optional) Parameters for finding the burn: { contractAddress, fromWallet, operator, tokenId }
  * @returns {Promise<any>} - A promise that resolves with the validated task artifacts.
  */
 async function executeTaskWithValidation(
@@ -80,9 +83,20 @@ async function executeTaskWithValidation(
     step: any,
     payments: any
   ) => Promise<any>,
-  step: any
+  step: any,
+  burnParams?: {
+    contractAddress: string;
+    fromWallet: string;
+    operator: string;
+    tokenId: string | number;
+  }
 ): Promise<any> {
   return new Promise(async (resolve, reject) => {
+    let lastBlock: number | undefined = undefined;
+    if (burnParams) {
+      const provider = getProvider();
+      lastBlock = await provider.getBlockNumber();
+    }
     const result = await payments.query.createTask(
       agentDid,
       taskData,
@@ -113,6 +127,22 @@ async function executeTaskWithValidation(
     );
     if (result.status !== 201) {
       reject(new Error(`Error creating task: ${JSON.stringify(result.data)}`));
+    }
+    // Search for the burn after createTask if burn parameters are passed
+    if (burnParams && lastBlock !== undefined) {
+      const burns = await findERC1155Burns(
+        burnParams.contractAddress,
+        burnParams.fromWallet,
+        burnParams.operator,
+        burnParams.tokenId,
+        lastBlock
+      );
+      if (burns.length > 0) {
+        const burnTx = burns[burns.length - 1];
+        logger.info(`Burn detected after createTask: ${burnTx.txHash}`);
+      } else {
+        logger.warn("No burn detected after createTask.");
+      }
     }
   });
 }
