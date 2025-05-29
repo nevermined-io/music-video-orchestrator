@@ -27,6 +27,5 @@ export async function logMessage(payments, logMessage: TaskLogMessage) {
       logger.info(message);
   }
 
-  // Remote log
   await payments.query.logTask(logMessage);
 }

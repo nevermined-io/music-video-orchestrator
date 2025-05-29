@@ -51,6 +51,7 @@ export function sendSseEvent(
       | "reasoning"
       | "answer"
       | "transaction"
+      | "nvm-transaction"
       | "error"
       | "warning"
       | "callAgent";

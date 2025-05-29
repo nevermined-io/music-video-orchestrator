@@ -2,6 +2,7 @@ import { ethers, Contract, Signer, BigNumber } from "ethers";
 import { Token, CurrencyAmount, Percent, TradeType } from "@uniswap/sdk-core";
 import { Pair, Route, Trade } from "@uniswap/v2-sdk";
 import { logger } from "../logger/logger";
+import { PlanDDOHelper } from "./PlanDDOHelper";
 import {
   RPC_URL,
   PRIVATE_KEY,
@@ -68,41 +69,20 @@ export async function getBlockNumber(): Promise<number> {
 }
 
 /**
- * Gets the contract address from the DDO.
+ * Gets the parameters needed to search for the burn of an ERC1155 NFT from the plan DDO and the step.
  *
- * @param {any} ddo - The DDO.
- * @returns {string} The contract address.
+ * @param {PlanDDOHelper} planHelper - Instance of PlanDDOHelper for the external plan.
+ * @param {PlanDDOHelper} ourPlanHelper - Instance of PlanDDOHelper for our own plan (to get our agent wallet).
+ * @returns {Promise<{ contractAddress: string, fromWallet: string, operator: string, tokenId: string | number } | undefined>}
  */
-export function getContractAddress(ddo: any): string {
-  return ddo.service[2].attributes.serviceAgreementTemplate.conditions
-    .find((c: any) => c.name === "transferNFT")
-    ?.parameters.find((p: any) => p.name === "_contractAddress")?.value;
-}
-
-/**
- * Gets the creator wallet from the DDO.
- *
- * @param {any} ddo - The DDO.
- * @returns {string} The creator wallet.
- */
-export function getCreatorWallet(ddo: any): string {
-  return ddo.service[2].attributes.main.creator;
-}
-
-/**
- * Gets the parameters needed to search for the burn of an ERC1155 NFT from the plan DID and the step.
- *
- * @param {any} payments - Payments instance.
- * @param {string} planDid - DID of the plan.
- * @returns {Promise<{ contractAddress: string, fromWallet: string, operator: string, tokenId: string | number, creatorWallet: string } | undefined>}
- */
-export async function getBurnParamsForPlan(payments: any, planDid: string) {
-  const ddo = await payments.getAssetDDO(planDid);
-  const contractAddress = getContractAddress(ddo);
-  const creatorWallet = getCreatorWallet(ddo);
-  const operator = "0x5838B5512cF9f12FE9f2beccB20eb47211F9B0bc";
-  const fromWallet = "0xaE61638CE22c375D21B113C3370FD9c1128a8DDf";
-  const tokenId = BigInt(planDid.replace("did:nv:", "")).toString();
+export async function getBurnParamsForPlan(
+  planHelper: PlanDDOHelper,
+  ourPlanHelper: PlanDDOHelper
+) {
+  const fromWallet = await ourPlanHelper.getAgentWallet();
+  const contractAddress = await planHelper.get1155ContractAddress();
+  const operator = await planHelper.getBurnOperator();
+  const tokenId = await planHelper.getTokenId();
 
   if (contractAddress && fromWallet && tokenId !== undefined) {
     return {
@@ -110,7 +90,33 @@ export async function getBurnParamsForPlan(payments: any, planDid: string) {
       fromWallet,
       operator,
       tokenId,
-      creatorWallet,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Gets the parameters needed to search for the mint of an ERC1155 NFT from the plan DDO and the step.
+ *
+ * @param {PlanDDOHelper} planHelper - Instance of PlanDDOHelper for the external plan.
+ * @param {PlanDDOHelper} ourPlanHelper - Instance of PlanDDOHelper for our own plan (to get our agent wallet).
+ * @returns {Promise<{ contractAddress: string, toWallet: string, operator: string, tokenId: string | number } | undefined>}
+ */
+export async function getMintParamsForPlan(
+  planHelper: PlanDDOHelper,
+  ourPlanHelper: PlanDDOHelper
+) {
+  const toWallet = await ourPlanHelper.getAgentWallet();
+  const contractAddress = await planHelper.get1155ContractAddress();
+  const operator = await planHelper.getMintOperator();
+  const tokenId = await planHelper.getTokenId();
+
+  if (contractAddress && toWallet && tokenId !== undefined) {
+    return {
+      contractAddress,
+      toWallet,
+      operator,
+      tokenId,
     };
   }
   return undefined;
@@ -402,35 +408,97 @@ export async function performSwapForPlan(
 }
 
 /**
- * Busca eventos de burn históricos de un ERC1155 (TransferSingle a address(0)) para un usuario y token específico.
+ * Finds ERC1155 burn events for a specific token and wallet.
  *
- * @param {string} contractAddress - Dirección del contrato ERC1155
- * @param {string} fromWallet - Wallet que tenía el NFT
- * @param {string} operator - Dirección que ejecutó el burn (proxy)
- * @param {string|number} tokenId - Token ID del NFT
- * @param {number|string} fromBlock - Bloque desde el que buscar (por defecto 0)
- * @param {number|string} toBlock - Bloque hasta el que buscar (por defecto 'latest')
- * @returns {Promise<Array>} - Lista de transacciones de burn encontradas
+ * @param {PlanDDOHelper} planHelper - Instance of PlanDDOHelper for the external plan.
+ * @param {PlanDDOHelper} ourPlanHelper - Instance of PlanDDOHelper for our own plan (to get our agent wallet).
+ * @param {number|string} fromBlock - Block from which to search (default: 0)
+ * @param {number|string} toBlock - Block to which to search (default: 'latest')
+ * @returns {Promise<Array<any>>} A promise that resolves to an array of burn events.
  */
 export async function findERC1155Burns(
-  contractAddress: string,
-  fromWallet: string,
-  operator: string,
-  tokenId: string | number,
+  planHelper: PlanDDOHelper,
+  ourPlanHelper: PlanDDOHelper,
   fromBlock: number | string = 0,
   toBlock: number | string = "latest"
 ): Promise<Array<any>> {
+  const burnParams = await getBurnParamsForPlan(planHelper, ourPlanHelper);
+  if (!burnParams) {
+    return [];
+  }
+  const { contractAddress, fromWallet, operator, tokenId } = burnParams;
   const provider = getProvider();
   const contract = new Contract(contractAddress, ERC1155_ABI, provider);
   const burnAddress = "0x0000000000000000000000000000000000000000";
   const filter = contract.filters.TransferSingle(
     operator,
     fromWallet,
-    burnAddress,
-    tokenId
+    burnAddress
   );
   const events = await contract.queryFilter(filter, fromBlock, toBlock);
-  return events.map((ev) => {
+
+  const filteredEvents = events.filter((ev) => {
+    return ev.args && ev.args.id.toString() === tokenId;
+  });
+
+  return filteredEvents.map((ev) => {
+    const args = ev.args;
+    const hasArgs =
+      args &&
+      typeof args === "object" &&
+      "operator" in args &&
+      "from" in args &&
+      "to" in args &&
+      "id" in args &&
+      "value" in args;
+    return {
+      txHash: ev.transactionHash,
+      blockNumber: ev.blockNumber,
+      operator: hasArgs ? args.operator : undefined,
+      from: hasArgs ? args.from : undefined,
+      to: hasArgs ? args.to : undefined,
+      tokenId: hasArgs ? args.id.toString() : undefined,
+      value: hasArgs ? args.value.toString() : undefined,
+    };
+  });
+}
+
+/**
+ * Finds ERC1155 mint events (TransferSingle with from=0x0) for a specific token and wallet.
+ *
+ * @param {string} contractAddress - ERC1155 contract address.
+ * @param {string} toWallet - Recipient wallet address (our agent).
+ * @param {string|number} tokenId - Token ID.
+ * @param {number|string} fromBlock - Block from which to search (default: 0)
+ * @param {number|string} toBlock - Block to which to search (default: 'latest')
+ * @returns {Promise<Array<any>>} A promise that resolves to an array of mint events.
+ */
+export async function findERC1155Mints(
+  planHelper: PlanDDOHelper,
+  ourPlanHelper: PlanDDOHelper,
+  fromBlock: number | string = 0,
+  toBlock: number | string = "latest"
+): Promise<Array<any>> {
+  const mintParams = await getMintParamsForPlan(planHelper, ourPlanHelper);
+  if (!mintParams) {
+    return [];
+  }
+  const { contractAddress, toWallet, operator, tokenId } = mintParams;
+  const provider = getProvider();
+  const contract = new Contract(contractAddress, ERC1155_ABI, provider);
+  const mintAddress = "0x0000000000000000000000000000000000000000";
+  const filter = contract.filters.TransferSingle(
+    operator,
+    mintAddress,
+    toWallet
+  );
+  const events = await contract.queryFilter(filter, fromBlock, toBlock);
+
+  const filteredEvents = events.filter((ev) => {
+    return ev.args && ev.args.id.toString() === tokenId;
+  });
+
+  return filteredEvents.map((ev) => {
     const args = ev.args;
     const hasArgs =
       args &&

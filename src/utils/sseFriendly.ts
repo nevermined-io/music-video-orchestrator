@@ -41,7 +41,7 @@ Never make up or infer information. Never explain or contextualize.
 Special Rule: TECHNICAL ERRORS
 
 If the status contains a technical error with stack traces, UUIDs, file paths, raw JSON errors, or other unhelpful internal details, extract only the main actions and human-meaningful error reasons (for example: "Failed to order credits for plan. Reason: forbidden." or "Subscription purchase failed: insufficient balance.").
-Ignore all stack traces, UUIDs, code fragments, file paths, and detailed object dumps—the user does not need them.
+Ignore all stack traces, UUIDs, code fragments, file paths, and detailed object dumps—the user does not need them, but interpret them if they are human-meaningful. Try to give a human-meaningful explanation of the error (error 400, 403, 404, 429, 500, etc.).
 
 Be as literal and complete as possible, but filter and synthesize only for technical error verbosity.`;
 
@@ -76,6 +76,7 @@ export async function sendFriendlySseEvent(
     | "reasoning"
     | "answer"
     | "transaction"
+    | "nvm-transaction"
     | "error"
     | "warning"
     | "callAgent",

@@ -8,11 +8,7 @@ import { AgentExecutionStatus, generateStepId } from "@nevermined-io/payments";
 import { uploadVideoToIPFS } from "../utils/uploadVideoToIPFS";
 import { sendFriendlySseEvent } from "../utils/sseFriendly";
 import { retryOperation } from "../utils/retryOperation";
-import {
-  findERC1155Burns,
-  getBlockNumber,
-  getBurnParamsForPlan,
-} from "../payments/blockchain";
+import { getBlockNumber } from "../payments/blockchain";
 
 import {
   MUSIC_SCRIPT_GENERATOR_DID,
@@ -23,7 +19,6 @@ import {
   VIDEO_GENERATOR_PLAN_DID,
 } from "../config/env";
 
-import { ensureSufficientBalance } from "../payments/ensureBalance";
 import {
   validateMusicScriptTask,
   validateSongGenerationTask,
@@ -31,6 +26,8 @@ import {
   validateVideoGenerationTask,
 } from "./taskValidation";
 import { setUserRequest } from "../utils/conversationStore";
+import { PlanDDOHelper } from "../payments/PlanDDOHelper";
+import { ensureSufficientBalance } from "../payments/planService";
 
 /* -------------------------------------
    Helper Functions
@@ -70,9 +67,9 @@ async function updateStepFailure(
  * @param agentDid - The DID of the external agent.
  * @param taskData - The data payload for creating the task.
  * @param accessConfig - The access configuration for the agent.
- * @param validationFn - A function that validates the task output. It receives (taskId, agentDid, accessConfig, step, payments) and returns a promise with the validated artifacts.
+ * @param validationFn - A function that validates the task output. It receives (taskId, agentDid, accessConfig, step, payments, extraArgs) and returns a promise with the validated artifacts.
  * @param step - The current step object.
- * @param [burnParams] - (Optional) Parameters for finding the burn: { contractAddress, fromWallet, operator, tokenId }
+ * @param [extraArgs] - (Optional) Additional arguments to pass to the validation function.
  * @returns {Promise<any>} - A promise that resolves with the validated task artifacts.
  */
 async function executeTaskWithValidation(
@@ -85,9 +82,11 @@ async function executeTaskWithValidation(
     agentDid: string,
     accessConfig: any,
     step: any,
-    payments: any
+    payments: any,
+    extraArgs?: any
   ) => Promise<any>,
-  step: any
+  step: any,
+  extraArgs?: any
 ): Promise<any> {
   return new Promise(async (resolve, reject) => {
     const result = await payments.query.createTask(
@@ -103,7 +102,8 @@ async function executeTaskWithValidation(
               agentDid,
               accessConfig,
               step,
-              payments
+              payments,
+              extraArgs
             );
             resolve(artifacts);
           } else if (taskLog.task_status === AgentExecutionStatus.Failed) {
@@ -264,6 +264,8 @@ export async function handleInitStep(step: any, payments: any) {
  * @returns {Promise<void>} - A promise that resolves when the song generation task completes or fails.
  */
 export async function handleCallSongGenerator(step: any, payments: any) {
+  const planHelper = new PlanDDOHelper(payments, SONG_GENERATOR_PLAN_DID);
+
   logMessage(payments, {
     task_id: step.task_id,
     level: "info",
@@ -277,9 +279,8 @@ export async function handleCallSongGenerator(step: any, payments: any) {
   );
 
   const hasBalance = await ensureSufficientBalance(
-    SONG_GENERATOR_PLAN_DID,
+    planHelper,
     step,
-    payments,
     1,
     "Song Generator"
   );
@@ -319,7 +320,8 @@ export async function handleCallSongGenerator(step: any, payments: any) {
           taskData,
           accessConfig,
           validateSongGenerationTask,
-          step
+          step,
+          { blockNumber }
         ),
       2,
       async (err, attempt, maxRetries) => {
@@ -332,25 +334,6 @@ export async function handleCallSongGenerator(step: any, payments: any) {
         );
       }
     );
-    const burnParams = await getBurnParamsForPlan(
-      payments,
-      SONG_GENERATOR_PLAN_DID
-    );
-    if (burnParams) {
-      const burns = await findERC1155Burns(
-        burnParams.contractAddress,
-        burnParams.fromWallet,
-        burnParams.operator,
-        burnParams.tokenId,
-        blockNumber
-      );
-      if (burns.length > 0) {
-        const burnTx = burns[burns.length - 1];
-        logger.info(`Burn detected after createTask: ${burnTx.txHash}`);
-      } else {
-        logger.warn("No burn detected after createTask.");
-      }
-    }
   } catch (error: any) {
     sendFriendlySseEvent(
       step.task_id,
@@ -373,6 +356,12 @@ export async function handleCallSongGenerator(step: any, payments: any) {
  * @returns {Promise<void>} - A promise that resolves when the music script generation task completes or fails.
  */
 export async function handleGenerateMusicScript(step: any, payments: any) {
+  // const ourPlanHelper = new PlanDDOHelper(payments, PLAN_DID);
+  const planHelper = new PlanDDOHelper(
+    payments,
+    MUSIC_SCRIPT_GENERATOR_PLAN_DID
+  );
+
   logMessage(payments, {
     task_id: step.task_id,
     level: "info",
@@ -385,11 +374,7 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
     `Second step: Music Script Generator.`
   );
 
-  const hasBalance = await ensureSufficientBalance(
-    MUSIC_SCRIPT_GENERATOR_PLAN_DID,
-    step,
-    payments
-  );
+  const hasBalance = await ensureSufficientBalance(planHelper, step);
   if (!hasBalance) return;
 
   const accessConfig = await payments.query.getServiceAccessConfig(
@@ -450,6 +435,7 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
  * @returns {Promise<void>} - A promise that resolves when all image generation tasks complete or fail.
  */
 export async function handleCallImagesGenerator(step: any, payments: any) {
+  // const ourPlanHelper = new PlanDDOHelper(payments, PLAN_DID);
   const [{ characters, settings, duration, songUrl, prompts, title }] =
     step.input_artifacts;
 
@@ -465,10 +451,10 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
     `Third step: Images Generator. Generating ${characters.length} characters and ${settings.length} settings...`
   );
 
+  const planHelper = new PlanDDOHelper(payments, VIDEO_GENERATOR_PLAN_DID);
   const hasBalance = await ensureSufficientBalance(
-    VIDEO_GENERATOR_PLAN_DID,
+    planHelper,
     step,
-    payments,
     characters.length + settings.length
   );
   if (!hasBalance) return;
@@ -720,10 +706,8 @@ async function createVideoTaskForPrompt(
  * @param payments - The Payments instance.
  * @returns {Promise<void>} - A promise that resolves when all video tasks complete or fails.
  */
-export async function handleCallVideoGenerator(
-  step: any,
-  payments: any
-): Promise<void> {
+export async function handleCallVideoGenerator(step: any, payments: any) {
+  // const ourPlanHelper = new PlanDDOHelper(payments, PLAN_DID);
   const [{ prompts, characters, settings, duration, ...inputArtifacts }] =
     step.input_artifacts;
 
@@ -739,10 +723,10 @@ export async function handleCallVideoGenerator(
     message: `Creating video generation tasks for ${prompts.length} scenes...`,
   });
 
+  const planHelper = new PlanDDOHelper(payments, VIDEO_GENERATOR_PLAN_DID);
   const hasBalance = await ensureSufficientBalance(
-    VIDEO_GENERATOR_PLAN_DID,
+    planHelper,
     step,
-    payments,
     prompts.length
   );
   if (!hasBalance) return;
