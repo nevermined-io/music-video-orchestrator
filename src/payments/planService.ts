@@ -176,7 +176,7 @@ async function handleTokenSwapIfNeeded(
       swapResult = await retryOperation(
         async () => {
           const ourPlanDDO = await ourPlanHelper.loadDDO();
-          return performSwapForPlan(
+          return await performSwapForPlan(
             planPrice,
             ourTokenAddress,
             externalTokenAddress,
