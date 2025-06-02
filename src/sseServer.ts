@@ -50,6 +50,7 @@ export function sendSseEvent(
     type:
       | "reasoning"
       | "answer"
+      | "final-answer"
       | "transaction"
       | "nvm-transaction-agent"
       | "error"

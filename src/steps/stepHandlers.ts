@@ -1014,7 +1014,7 @@ export async function handleCompileVideo(
 
     sendFriendlySseEvent(
       step.task_id,
-      "answer",
+      "final-answer",
       `The final video for '${title}' is ready. Here is the link: ${finalVideoUrl}`,
       {},
       { mimeType: "video/mp4", parts: [finalVideoUrl] }

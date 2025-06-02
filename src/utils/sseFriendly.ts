@@ -75,6 +75,7 @@ export async function sendFriendlySseEvent(
   type:
     | "reasoning"
     | "answer"
+    | "final-answer"
     | "transaction"
     | "nvm-transaction-agent"
     | "error"
