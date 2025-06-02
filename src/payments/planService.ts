@@ -272,15 +272,15 @@ async function orderCreditsForPlan(
       await sendInfoAndLog(
         payments,
         step,
-        `${mintEvent.value} credits purchased for plan ${planDid}`,
-        "nvm-transaction",
+        `Orchestrator agent purchased ${mintEvent.value} credits for plan ${planDid}`,
+        "nvm-transaction-agent",
         { txHash: mintEvent.txHash, credits: mintEvent.value, planDid }
       );
     } else {
       await sendInfoAndLog(
         payments,
         step,
-        `Credits purchased for plan ${planDid}`
+        `Orchestrator agent purchased credits for plan ${planDid}`
       );
     }
     return true;
@@ -336,7 +336,7 @@ async function sendInfoAndLog(
   payments: any,
   step: any,
   message: string,
-  level: "reasoning" | "transaction" | "nvm-transaction" = "reasoning",
+  level: "reasoning" | "transaction" | "nvm-transaction-agent" = "reasoning",
   extraData?: any
 ): Promise<void> {
   await sendFriendlySseEvent(step.task_id, level, message, {

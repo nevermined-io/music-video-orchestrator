@@ -37,7 +37,7 @@ async function notifyBurnTransactionIfPresent(
       logger.info(`Burn detected after createTask: ${burnTx.txHash}`);
       sendFriendlySseEvent(
         parentStep.task_id,
-        "nvm-transaction",
+        "nvm-transaction-agent",
         `${burnTx.value} credits redeemed for plan ${planDid}`,
         { txHash: burnTx.txHash, credits: burnTx.value, planDid }
       );
@@ -90,6 +90,7 @@ export async function validateSongGenerationTask(
   const result = await payments.query.updateStep(parentStep.did, {
     ...parentStep,
     step_status: AgentExecutionStatus.Completed,
+    cost: 5,
     output: title,
     output_artifacts: { title, tags, lyrics, songUrl, duration, idea },
   });
@@ -164,6 +165,7 @@ export async function validateMusicScriptTask(
   const result = await payments.query.updateStep(parentStep.did, {
     ...parentStep,
     step_status: AgentExecutionStatus.Completed,
+    cost: 1,
     output:
       taskData.task.output || "Music script generation encountered an error.",
     output_artifacts: [

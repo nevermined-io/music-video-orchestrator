@@ -580,6 +580,7 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
       ...step,
       step_status: AgentExecutionStatus.Completed,
       output: "All image generation tasks completed",
+      cost: characters.length + settings.length,
       output_artifacts: [
         { characters, settings, duration, songUrl, prompts, title },
       ],
@@ -810,6 +811,7 @@ export async function handleCallVideoGenerator(step: any, payments: any) {
     await payments.query.updateStep(step.did, {
       ...step,
       step_status: AgentExecutionStatus.Completed,
+      cost: successfulVideos.length * 5,
       output: `Video generation completed with ${successfulVideos.length} successful videos`,
       output_artifacts: [
         { ...inputArtifacts, duration, generatedVideos: successfulVideos },
@@ -1021,6 +1023,7 @@ export async function handleCompileVideo(
     await payments.query.updateStep(step.did, {
       ...step,
       step_status: AgentExecutionStatus.Completed,
+      cost: 1,
       output: "Video clip compilation completed",
       output_artifacts: [finalVideoUrl],
     });
