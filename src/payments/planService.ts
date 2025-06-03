@@ -136,7 +136,7 @@ async function handleTokenSwapIfNeeded(
   await sendInfoAndLog(
     payments,
     step,
-    `Plan ${planDid} requires ${planPrice} ${externalTokenName}.`
+    `Plan ${planDid} accepts ${planPrice} ${externalTokenName}. Checking if agent has enough balance...`
   );
 
   let sufficient;

@@ -356,7 +356,6 @@ export async function handleCallSongGenerator(step: any, payments: any) {
  * @returns {Promise<void>} - A promise that resolves when the music script generation task completes or fails.
  */
 export async function handleGenerateMusicScript(step: any, payments: any) {
-  // const ourPlanHelper = new PlanDDOHelper(payments, PLAN_DID);
   const planHelper = new PlanDDOHelper(
     payments,
     MUSIC_SCRIPT_GENERATOR_PLAN_DID
@@ -386,6 +385,7 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
     input_artifacts: step.input_artifacts,
   };
 
+  const blockNumber = await getBlockNumber();
   try {
     sendFriendlySseEvent(
       step.task_id,
@@ -400,7 +400,8 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
           taskData,
           accessConfig,
           validateMusicScriptTask,
-          step
+          step,
+          { blockNumber }
         ),
       2,
       async (err, attempt, maxRetries) => {
@@ -435,7 +436,6 @@ export async function handleGenerateMusicScript(step: any, payments: any) {
  * @returns {Promise<void>} - A promise that resolves when all image generation tasks complete or fail.
  */
 export async function handleCallImagesGenerator(step: any, payments: any) {
-  // const ourPlanHelper = new PlanDDOHelper(payments, PLAN_DID);
   const [{ characters, settings, duration, songUrl, prompts, title }] =
     step.input_artifacts;
 
@@ -708,7 +708,6 @@ async function createVideoTaskForPrompt(
  * @returns {Promise<void>} - A promise that resolves when all video tasks complete or fails.
  */
 export async function handleCallVideoGenerator(step: any, payments: any) {
-  // const ourPlanHelper = new PlanDDOHelper(payments, PLAN_DID);
   const [{ prompts, characters, settings, duration, ...inputArtifacts }] =
     step.input_artifacts;
 
@@ -903,24 +902,32 @@ async function mergeVideos(
 }
 
 /**
- * Overlays an audio track onto a video using FFmpeg.
+ * Overlays an audio track onto a video using FFmpeg, trimming the audio to the specified duration.
  *
  * @param videoPath - The path of the video file.
  * @param audioUrl - The URL of the audio track.
  * @param outputPath - The final output file path.
+ * @param duration - The desired duration for the audio (in seconds).
  * @returns {Promise<void>}
  */
 async function addAudioToVideo(
   videoPath: string,
   audioUrl: string,
-  outputPath: string
+  outputPath: string,
+  duration?: number
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    ffmpeg()
+    let command = ffmpeg()
       .input(videoPath)
       .input(audioUrl)
       .videoCodec("copy")
-      .audioCodec("aac")
+      .audioCodec("aac");
+
+    if (duration) {
+      command = command.inputOptions([`-t ${duration}`]);
+    }
+
+    command
       .on("start", (cmd) => {
         logger.info(`FFmpeg final merge (audio) started with command: ${cmd}`);
       })
@@ -991,7 +998,7 @@ export async function handleCompileVideo(
       "/tmp",
       `final_with_audio_${Date.now()}.mp4`
     );
-    await addAudioToVideo(tempOutputPath, songUrl, finalOutputPath);
+    await addAudioToVideo(tempOutputPath, songUrl, finalOutputPath, duration);
     const convertedTitle =
       title.replace(/[^a-z0-9]/gi, "_").toLowerCase() + ".mp4";
 
