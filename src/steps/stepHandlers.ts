@@ -468,16 +468,18 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
    *
    * @param subject - The subject object (character or setting).
    * @param subjectType - The type of the subject, either "character" or "setting".
+   * @param id - The ID of the subject.
    * @returns {Promise<any>} - A promise that resolves with the validated task artifacts.
    */
   async function createImageTask(
     subject: any,
-    subjectType: "character" | "setting"
+    subjectType: "character" | "setting",
+    id?: string
   ): Promise<any> {
     const taskData = {
       name: step.name,
       input_query: subject.imagePrompt,
-      input_artifacts: [{ inference_type: "text2image" }],
+      input_artifacts: [{ inference_type: "text2image", id }],
     };
     return executeTaskWithValidation(
       payments,
@@ -503,9 +505,14 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
       "callAgent",
       `Calling Images Generator Agent to generate ${characters.length} images for characters and ${settings.length} images for settings...`
     );
-    const charactersPromises = characters.map((character: any) =>
+    const charactersPromises = characters.map((character: any, index: number) =>
       retryOperation(
-        () => createImageTask(character, "character"),
+        () =>
+          createImageTask(
+            character,
+            "character",
+            "character-" + index.toString()
+          ),
         2,
         async (err, attempt, maxRetries) => {
           sendFriendlySseEvent(
@@ -520,9 +527,10 @@ export async function handleCallImagesGenerator(step: any, payments: any) {
         }
       )
     );
-    const settingsPromises = settings.map((setting: any) =>
+    const settingsPromises = settings.map((setting: any, index: number) =>
       retryOperation(
-        () => createImageTask(setting, "setting"),
+        () =>
+          createImageTask(setting, "setting", "setting-" + index.toString()),
         2,
         async (err, attempt, maxRetries) => {
           sendFriendlySseEvent(
@@ -623,7 +631,8 @@ async function createVideoTaskForPrompt(
   characters: any[],
   accessConfig: any,
   payments: any,
-  step: any
+  step: any,
+  id?: string
 ): Promise<any> {
   // Select a setting: try to match promptObject.settingId; otherwise choose one at random.
   let setting = settings.find((s: any) => s.id === promptObject.settingId);
@@ -642,6 +651,7 @@ async function createVideoTaskForPrompt(
     input_artifacts: [
       {
         inference_type: "text2video",
+        id,
         images: [
           setting.imageUrl,
           ...charactersInScene.map((c: any) => c.imageUrl),
@@ -742,39 +752,42 @@ export async function handleCallVideoGenerator(step: any, payments: any) {
   );
 
   // Use retryOperation to handle retries for each prompt
-  const videoTaskPromises = prompts.map(async (promptObject: any) => {
-    try {
-      return await retryOperation(
-        () =>
-          createVideoTaskForPrompt(
-            promptObject,
-            settings,
-            characters,
-            accessConfig,
-            payments,
-            step
-          ),
-        2,
-        async (err, attempt, maxRetries) => {
-          sendFriendlySseEvent(
-            step.task_id,
-            "warning",
-            `Video generation failed for prompt "${
-              promptObject.prompt
-            }" (attempt ${attempt + 1}/${maxRetries + 1}): ${
-              err.message
-            }. Retrying...`
-          );
-        }
-      );
-    } catch (error) {
-      // Log the error but don't fail the entire step
-      logger.error(
-        `Video generation failed for prompt "${promptObject.prompt}" after all retries: ${error}`
-      );
-      return null;
+  const videoTaskPromises = prompts.map(
+    async (promptObject: any, index: number) => {
+      try {
+        return await retryOperation(
+          () =>
+            createVideoTaskForPrompt(
+              promptObject,
+              settings,
+              characters,
+              accessConfig,
+              payments,
+              step,
+              index.toString()
+            ),
+          2,
+          async (err, attempt, maxRetries) => {
+            sendFriendlySseEvent(
+              step.task_id,
+              "warning",
+              `Video generation failed for prompt "${
+                promptObject.prompt
+              }" (attempt ${attempt + 1}/${maxRetries + 1}): ${
+                err.message
+              }. Retrying...`
+            );
+          }
+        );
+      } catch (error) {
+        // Log the error but don't fail the entire step
+        logger.error(
+          `Video generation failed for prompt "${promptObject.prompt}" after all retries: ${error}`
+        );
+        return null;
+      }
     }
-  });
+  );
 
   try {
     const results = await Promise.all(videoTaskPromises);
