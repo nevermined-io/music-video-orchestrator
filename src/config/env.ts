@@ -77,3 +77,10 @@ export const NETWORK_ID = parseInt(process.env.NETWORK_ID!);
 export const UNISWAP_V2_ROUTER_ADDRESS = process.env.UNISWAP_V2_ROUTER_ADDRESS!;
 export const UNISWAP_V2_FACTORY_ADDRESS =
   process.env.UNISWAP_V2_FACTORY_ADDRESS!;
+
+/**
+ * Environment configuration for the music video orchestrator
+ */
+
+export const HELICONE_API_KEY = process.env.HELICONE_API_KEY!;
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;

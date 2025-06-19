@@ -1,5 +1,7 @@
 import { logger } from "../logger/logger";
 import ffmpeg from "fluent-ffmpeg";
+import crypto from 'crypto';
+import { AGENT_DID } from "../config/env";
 
 /**
  * Retrieves the duration (in seconds) of a remote or local MP4 video.
@@ -44,4 +46,34 @@ export function hasSongMetadata(step: any): boolean {
     );
   }
   return false;
+}
+
+/**
+ * Generates a deterministic agent ID based on the agent name
+ * @param agentName - The name of the agent
+ * @returns A deterministic agent ID
+ */
+export const generateDeterministicAgentId = (className?: string): string => {
+  if (!className) return AGENT_DID;
+  const hash = crypto.createHash('sha256').update(className).digest('hex').substring(0, 32);
+  // Format as UUID: 8-4-4-4-12
+  return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
+};
+
+/**
+ * Generates a random session ID
+ * @returns A random session ID
+ */
+export function generateSessionId(): string {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+/**
+ * Logs session information for tracking
+ * @param agentId - The agent ID
+ * @param sessionId - The session ID
+ * @param agentName - The name of the agent
+ */
+export function logSessionInfo(agentId: string, sessionId: string, agentName: string): void {
+  console.log(`[${agentName}] Session started - Agent ID: ${agentId}, Session ID: ${sessionId}`);
 }
