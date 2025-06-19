@@ -8,6 +8,8 @@ import {
   runInQueue,
 } from "./conversationStore";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { generateDeterministicAgentId, generateSessionId, logSessionInfo } from "./utils";
+import { HELICONE_API_KEY } from "../config/env";
 
 /**
  * Calls an LLM to generate a user-friendly explanation for a technical action.
@@ -19,8 +21,21 @@ import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 async function getFriendlyExplanation(
   conversationHistory: ConversationMessage[]
 ): Promise<string> {
+  // Generate deterministic agent ID and random session ID
+  const agentId = generateDeterministicAgentId();
+  const sessionId = generateSessionId();
+  
+  // Log session information
+  logSessionInfo(agentId, sessionId, 'FriendlyExplanation');
+
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
+    baseURL: "https://oai.helicone.ai/v1",
+    defaultHeaders: {
+      "Helicone-Auth": `Bearer ${HELICONE_API_KEY}`,
+      "Helicone-Property-AgentId": agentId,
+      "Helicone-Property-SessionId": sessionId,
+    }
   });
 
   const systemPrompt = `You are a chatbot that interacts with a user who has requested you to create a music video.
