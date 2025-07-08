@@ -9,7 +9,7 @@ import {
 } from "./conversationStore";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { generateDeterministicAgentId, generateSessionId, logSessionInfo } from "./utils";
-import { HELICONE_API_KEY } from "../config/env";
+import { withHeliconeOpenAI } from "./heliconeWrapper";
 
 /**
  * Calls an LLM to generate a user-friendly explanation for a technical action.
@@ -28,15 +28,7 @@ async function getFriendlyExplanation(
   // Log session information
   logSessionInfo(agentId, sessionId, 'FriendlyExplanation');
 
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    baseURL: "https://oai.helicone.ai/v1",
-    defaultHeaders: {
-      "Helicone-Auth": `Bearer ${HELICONE_API_KEY}`,
-      "Helicone-Property-AgentId": agentId,
-      "Helicone-Property-SessionId": sessionId,
-    }
-  });
+  const openai = new OpenAI(withHeliconeOpenAI(process.env.OPENAI_API_KEY!, agentId, sessionId));
 
   const systemPrompt = `You are a chatbot that interacts with a user who has requested you to create a music video.
 You will be given a system prompt that contains the current status of the process.
